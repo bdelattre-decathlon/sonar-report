@@ -130,6 +130,22 @@
 		td.component{
 			word-break: break-all;
 		}
+		td.BLOCKER{
+			background-color: #2c3e50;
+    		color: white;
+		}
+		td.CRITICAL{
+			background-color: #d43223;;
+    		color: white;
+		}
+		td.MAJOR{
+			background-color: #f39c12;
+    		color: white;
+		}
+		td.MINOR{
+			background-color: #319ddb;
+    		color: white;
+		}
 
 		hr {
 			border: 0;
@@ -267,8 +283,8 @@
 			<tbody>
 				<% for(var i = 0; i < issues.length; i++) { %>
 				<tr>
-					<td><a href="<%= sonarBaseURL %>/coding_rules#rule_key=<%= issues[i].rule %>"><%= issues[i].rule %></a></td>
-					<td><%= issues[i].severity %></td>
+					<td><a href="#<%= issues[i].rule %>"><%= issues[i].rule %></a></td>
+					<td class="<%= issues[i].severity %>"><%= issues[i].severity %></td>
 					<td class="component"><%= issues[i].component %></td>
 					<td><%= issues[i].line %></td>
 					<td><%= issues[i].description %></td>
@@ -282,6 +298,39 @@
 
 		<% } %>
 
+		<%if (hotspots.length > 0) { %>
+			<h2>Detail of Security Hotspots</h2>
+			<table>
+				<thead>
+					<tr>
+						<th>Rule</th>
+						<th>Severity</th>
+						<th>Component</th>
+						<th>Line</th>
+						<th>Description</th>
+						<th>Message</th>
+						<th style="display:none;">Key</th>
+						<th>Status</th>
+					</tr>
+				</thead>
+				<tbody>
+					<% for(var i = 0; i < hotspots.length; i++) { %>
+					<tr>
+						<td><a href="#<%= hotspots[i].rule %>"><%= hotspots[i].rule %></a></td>
+						<td class="<%= hotspots[i].severity %>"><%= hotspots[i].severity %></td>
+						<td class="component"><%= hotspots[i].component %></td>
+						<td><%= hotspots[i].line %></td>
+						<td><%= hotspots[i].description %></td>
+						<td><%= hotspots[i].message %></td>
+						<td style="display:none;"><%= hotspots[i].key %></td>
+						<td><%= hotspots[i].status %></td>
+					</tr>
+					<% } %>
+				</tbody>
+			</table>
+	
+			<% } %>
+
 		<%if (!noRulesInReport) { %>
 		<h3>Known Security Rules</h3>
 		<table style="table-layout: fixed; word-wrap: break-word">
@@ -293,9 +342,9 @@
 			</thead>
 			<tbody>
 				<% for (const [ruleKey, rule] of rules) { %>
-				<tr>
-					<td><a
-							href="https://next.sonarqube.com/sonarqube/coding_rules#rule_key=<%= ruleKey %>"><%= ruleKey %></a>
+				<tr id="<%= ruleKey %>">
+					<td>
+						<a target="_blank" href="https://next.sonarqube.com/sonarqube/coding_rules?open=<%= ruleKey %>&rule_key=<%= ruleKey %>"><%= ruleKey %></a>
 					</td>
 					<td>
 						<details>

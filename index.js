@@ -3,6 +3,7 @@ const argv = require("minimist")(process.argv.slice(2));
 const got = require('got');
 const tunnel = require('tunnel');
 const ejs = require("ejs");
+const path = require("path");
 
 if (argv.help) {
   console.log(`SYNOPSIS
@@ -115,12 +116,15 @@ function logError(context, error){
     noRulesInReport: (argv.noRulesInReport == 'true'),
     vulnerabilityPhrase: argv.vulnerabilityPhrase || 'Vulnerability',
     vulnerabilityPluralPhrase: argv.vulnerabilityPluralPhrase || 'Vulnerabilities',
+    qualityGateStatus: argv.qualityGateStatus,
     // sonar URL without trailing /
     sonarBaseURL: argv.sonarurl.replace(/\/$/, ""),
     sonarOrganization: argv.sonarorganization,
     rules: new Map(),
     issues: [],
-    hotspotKeys: []
+    hotspots: [],
+    hotspotKeys: [],
+    languages: [], 
   };
 
   const leakPeriodFilter = data.sinceLeakPeriod ? '&sinceLeakPeriod=true' : '';
@@ -162,6 +166,7 @@ function logError(context, error){
     });
     const json = JSON.parse(res.body);
     version = json.version;
+    //console.log("sonarqube version: %s", version);
     console.error("sonarqube version: %s", version);
   } catch (error) {
       logError("getting version", error);
@@ -173,6 +178,8 @@ function logError(context, error){
   let ISSUE_STATUSES="";
   let HOTSPOT_STATUSES="TO_REVIEW"
 
+  version= version.substring(0,3);
+  //console.log("sonarqube version: %s", version);
   if(data.noSecurityHotspot || version < "7.3"){
     // hotspots don't exist
     DEFAULT_ISSUES_FILTER="&types=VULNERABILITY"
@@ -185,19 +192,20 @@ function logError(context, error){
     DEFAULT_RULES_FILTER="&types=VULNERABILITY,SECURITY_HOTSPOT"
     ISSUE_STATUSES="OPEN,CONFIRMED,REOPENED"
   }
-  else if (version >= "7.8" && version < "8.2"){
+  else if (version >= "7.8" && version < "8.0"){
     // hotspots are stored in the /issues endpoint and issue status includes TO_REVIEW,IN_REVIEW
     DEFAULT_ISSUES_FILTER="&types=VULNERABILITY,SECURITY_HOTSPOT"
     DEFAULT_RULES_FILTER="&types=VULNERABILITY,SECURITY_HOTSPOT"
     ISSUE_STATUSES="OPEN,CONFIRMED,REOPENED,TO_REVIEW,IN_REVIEW"
   }
   else{
-    // version >= 8.2
+    // version >= 8.0
     // hotspots are in a dedicated endpoint: rules have type SECURITY_HOTSPOT but issues don't
     DEFAULT_ISSUES_FILTER="&types=VULNERABILITY"
     DEFAULT_RULES_FILTER="&types=VULNERABILITY,SECURITY_HOTSPOT"
     ISSUE_STATUSES="OPEN,CONFIRMED,REOPENED"
   }
+
   
 
   // filters for getting rules and issues
@@ -205,6 +213,7 @@ function logError(context, error){
   let filterIssue = DEFAULT_ISSUES_FILTER;
   let filterHotspots = "";
   let filterProjectStatus = "";
+  let filterLanguages = "";
 
   if(data.allBugs){
     filterRule = "";
@@ -253,11 +262,11 @@ function logError(context, error){
   }
 
   if (data.sinceLeakPeriod) {
-    const res = await got(`${sonarBaseURL}/api/settings/values?keys=sonar.leak.period`, {
+    const res = await got(`${sonarBaseURL}/api/settings/values?component=${sonarComponent}&keys=sonar.leak.period`, {
       agent,
       headers
     });
-    const json = JSON.parse(res.getBody());
+    const json = JSON.parse(res.body);
     data.previousPeriod = json.settings[0].value;
   }
 
@@ -280,6 +289,34 @@ function logError(context, error){
       }
   }
 
+  try {
+    const response = await got(`${sonarBaseURL}/api/measures/component?component=${sonarComponent}&metricKeys=ncloc_language_distribution`, {
+        agent,
+        headers
+    });
+    const json = JSON.parse(response.body);
+    //nbResults = json.measures.length;
+    //console.log(json.component.measures[0]);
+    const values = json.component.measures[0].value.split(";");
+    //console.log(values);
+    values.forEach(v => {
+      const value_separate = v.split('=');
+      data.languages.push({
+        "language":value_separate[0],
+        "line_count":value_separate[1]
+      });
+    });
+    //console.log(data.languages);
+  } catch (error) {
+      logError("getting languages", error);
+      return null;
+  }
+
+  if(data.languages.length > 0) {
+    filterLanguages = "&languages=";
+    data.languages.forEach(l => filterLanguages += l.language+",");
+  }
+
   {
     const pageSize = 500;
     const maxResults = 10000;
@@ -289,7 +326,7 @@ function logError(context, error){
 
   do {
       try {
-          const response = await got(`${sonarBaseURL}/api/rules/search?activation=true&f=name,htmlDesc,severity&ps=${pageSize}&p=${page}${filterRule}${withOrganization}`, {
+          const response = await got(`${sonarBaseURL}/api/rules/search?activation=true&f=name,htmlDesc,severity&ps=${pageSize}&p=${page}${filterRule}${withOrganization}${filterLanguages}`, {
               agent,
               headers
           });
@@ -306,7 +343,7 @@ function logError(context, error){
       }
     } while (nbResults === pageSize && page <= maxPage);
   }
-
+ 
   {
     const pageSize = 500;
     const maxResults = 10000;
@@ -325,7 +362,7 @@ function logError(context, error){
      */
     do {
       try {
-          const response = await got(`${sonarBaseURL}/api/issues/search?componentKeys=${sonarComponent}&ps=${pageSize}&p=${page}&statuses=${ISSUE_STATUSES}&resolutions=&s=STATUS&asc=no${leakPeriodFilter}${filterIssue}${withOrganization}`, {
+          const response = await got(`${sonarBaseURL}/api/issues/search?componentKeys=${sonarComponent}&ps=${pageSize}&p=${page}&statuses=${ISSUE_STATUSES}&resolutions=&s=SEVERITY&asc=no${leakPeriodFilter}${filterIssue}${withOrganization}${filterLanguages}`, {
               agent,
               headers
           });
@@ -356,12 +393,12 @@ function logError(context, error){
     } while (nbResults === pageSize && page <= maxPage);
 
     let hSeverity = "";
-    if (version >= "8.2" && !data.noSecurityHotspot) {
+    if (version >= "8.0" && !data.noSecurityHotspot) {
       // 1) Listing hotspots with hotspots/search
       page = 1;
       do {
         try {
-            const response = await got(`${sonarBaseURL}/api/hotspots/search?projectKey=${sonarComponent}${filterHotspots}${withOrganization}&ps=${pageSize}&p=${page}&statuses=${HOTSPOT_STATUSES}`, {
+            const response = await got(`${sonarBaseURL}/api/hotspots/search?projectKey=${sonarComponent}${filterHotspots}${withOrganization}&ps=${pageSize}&p=${page}&statuses=${HOTSPOT_STATUSES}&s=SEVERITY`, {
                 agent,
                 headers
             });
@@ -383,12 +420,13 @@ function logError(context, error){
                 headers
             });
             const hotspot = JSON.parse(response.body);
+            //console.log(hotspot);
             hSeverity = hotspotSeverities[hotspot.rule.vulnerabilityProbability];
             if (hSeverity === undefined) {
               hSeverity = "MAJOR";
               console.error("Unknown hotspot severity: %s", hotspot.vulnerabilityProbability);
             }
-            data.issues.push(
+            data.hotspots.push(
               {
                 rule: hotspot.rule.key,
                 severity: hSeverity,
@@ -422,5 +460,6 @@ function logError(context, error){
 
   ejs.renderFile(`${__dirname}/index.ejs`, data, {}, (err, str) => {
     console.log(str);
+    //console.log(err);
   });
 })();
