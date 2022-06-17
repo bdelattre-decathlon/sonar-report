@@ -127,7 +127,10 @@
 		th {
 			border: 1px solid #EEE
 		}
-		td.component{
+		td.component {
+			max-width: 510px;
+		}
+		td.word_break{
 			word-break: break-all;
 		}
 		td.BLOCKER{
@@ -145,6 +148,10 @@
 		td.MINOR{
 			background-color: #319ddb;
     		color: white;
+		}
+
+		span.message {
+			font-weight: bold;
 		}
 
 		hr {
@@ -202,7 +209,7 @@
 		</dl>
 
         <%if (qualityGateStatus) { %>
-        <h2>Quality gate status: <%= qualityGateStatus.projectStatus.status %> on <%= qualityGateStatus.projectStatus.period.date %> (<%= qualityGateStatus.projectStatus.period.parameter %>)</h2>
+        <h2>Quality gate status: <%= qualityGateStatus.projectStatus.status %> on <%= qualityGateStatus.projectStatus.periods.date %> (<%= qualityGateStatus.projectStatus.periods.parameter %>)</h2>
 
           <table>
             <thead>
@@ -227,6 +234,36 @@
         <% } %>
 
 		<h2>Summary of the Detected <%= vulnerabilityPluralPhrase %></h2>
+		<table>
+			<thead>
+				<tr>
+					<th>Type</th>
+					<th>Number of Issues</th>
+				</tr>
+			</thead>
+			<tbody>
+				<tr>
+					<td>BUGS</td>
+					<td><%= summary.bugs %></td>
+				</tr>
+				<tr>
+					<td>Vulnerabilities</td>
+					<td><%= summary.vulnerabilities %></td>
+				</tr>
+				<tr>
+					<td>Code smells</td>
+					<td><%= summary.code_smells %></td>
+				</tr>
+				<tr>
+					<td>Security Hotspots</td>
+					<td><%= measures.get("security_hotspots").value %></td>
+				</tr>
+				<tr>
+					<td>Duplicated Line Density</td>
+					<td><%= measures.get("duplicated_lines_density").value %></td>
+				</tr>
+			</tbody>
+		</table>
 		<table>
 			<thead>
 				<tr>
@@ -270,27 +307,36 @@
 		<table>
 			<thead>
 				<tr>
-					<th>Rule</th>
+					<th>Type</th>
 					<th>Severity</th>
 					<th>Component</th>
-					<th>Line</th>
 					<th>Description</th>
-					<th>Message</th>
 					<th style="display:none;">Key</th>
+					<%if (displayStatus === "true") { %>
 					<th>Status</th>
+					<% } %>
 				</tr>
 			</thead>
 			<tbody>
 				<% for(var i = 0; i < issues.length; i++) { %>
 				<tr>
-					<td><a href="#<%= issues[i].rule %>"><%= issues[i].rule %></a></td>
+					<td><%= issues[i].type %></td>
 					<td class="<%= issues[i].severity %>"><%= issues[i].severity %></td>
-					<td class="component"><%= issues[i].component %></td>
-					<td><%= issues[i].line %></td>
-					<td><%= issues[i].description %></td>
-					<td><%= issues[i].message %></td>
+					<td class="component word_break"><samp><%= issues[i].component %></samp><br>
+						line <%= issues[i].line %>
+					</td>
+					<td>
+						&rarr; <span class="message"><%= issues[i].message %></span><br><br>
+
+						Rule <a target="_blank" href="https://next.sonarqube.com/sonarqube/coding_rules?open=<%= issues[i].rule %>&rule_key=<%= issues[i].rule %>"><%= issues[i].rule %></a>: <%= issues[i].description %><br>
+						<details>
+							<%- rules.get(issues[i].rule).htmlDesc %>
+						</details>
+					</td>
 					<td style="display:none;"><%= issues[i].key %></td>
+					<%if (displayStatus === "true") { %>
 					<td><%= issues[i].status %></td>
+					<% } %>
 				</tr>
 				<% } %>
 			</tbody>
@@ -303,33 +349,74 @@
 			<table>
 				<thead>
 					<tr>
-						<th>Rule</th>
 						<th>Severity</th>
 						<th>Component</th>
-						<th>Line</th>
 						<th>Description</th>
-						<th>Message</th>
 						<th style="display:none;">Key</th>
+						<%if (displayStatus === "true") { %>
 						<th>Status</th>
+						<% } %>
 					</tr>
 				</thead>
 				<tbody>
 					<% for(var i = 0; i < hotspots.length; i++) { %>
 					<tr>
-						<td><a href="#<%= hotspots[i].rule %>"><%= hotspots[i].rule %></a></td>
 						<td class="<%= hotspots[i].severity %>"><%= hotspots[i].severity %></td>
-						<td class="component"><%= hotspots[i].component %></td>
-						<td><%= hotspots[i].line %></td>
-						<td><%= hotspots[i].description %></td>
-						<td><%= hotspots[i].message %></td>
+						<td class="component word_break"><samp><%= hotspots[i].component %></samp><br>
+							line <%= hotspots[i].line %>
+						</td>
+						<td>
+							&rarr; <span class="message"><%= hotspots[i].message %></span><br><br>
+
+							Rule <a target="_blank" href="https://next.sonarqube.com/sonarqube/coding_rules?open=<%= hotspots[i].rule %>&rule_key=<%= hotspots[i].rule %>"><%= hotspots[i].rule %></a>: <%= hotspots[i].description %><br>
+							<details>
+								<%- rules.get(hotspots[i].rule).htmlDesc %>
+							</details>
+						</td>
 						<td style="display:none;"><%= hotspots[i].key %></td>
+						<%if (displayStatus === "true") { %>
 						<td><%= hotspots[i].status %></td>
+						<% } %>
+						</tr>
+						<% } %>
+				</tbody>
+			</table>
+	
+		<% } %>
+
+		<%if (duplications.length > 0) { %>
+			<h2>Detail of duplications</h2>
+			<table style="table-layout: fixed; word-wrap: break-word">
+				<thead>
+					<tr>
+						<th>Concerned block </th>
+						<th>Duplicated in</th>
+					</tr>
+				</thead>
+				<tbody>
+					<% for(var i = 0; i < duplications.length; i++) { %>
+					<tr>
+						<td>
+							<samp><%= duplications[i].blocks[0].file %></samp><br>
+							line <%= duplications[i].blocks[0].line %> to <%= duplications[i].blocks[0].line + duplications[i].blocks[0].size %>
+						</td>
+						<td>
+							<ul>
+							<% for(var j = 1; j< duplications[i].blocks.length; j++) { %>
+								<li>
+									<samp><%= duplications[i].blocks[j].file %></samp><br>
+									line <%= duplications[i].blocks[j].line %> to <%= duplications[i].blocks[j].line + duplications[i].blocks[j].size %>
+								</li>
+							<% } %>
+							</ul>
+							
+						</td>
 					</tr>
 					<% } %>
 				</tbody>
 			</table>
 	
-			<% } %>
+		<% } %>
 
 		<%if (!noRulesInReport) { %>
 		<h3>Known Security Rules</h3>

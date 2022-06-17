@@ -75,6 +75,9 @@ DESCRIPTION
             
     --vulnerabilityPluralPhrase
         Set to override 'Vulnerabilities' phrase in the report. Default 'Vulnerabilities'    
+
+    --displayStatus
+        Display or not the column "Status"
     
     --help
         display this help message`);
@@ -120,11 +123,45 @@ function logError(context, error){
     // sonar URL without trailing /
     sonarBaseURL: argv.sonarurl.replace(/\/$/, ""),
     sonarOrganization: argv.sonarorganization,
+    displayStatus: argv.displayStatus,
     rules: new Map(),
     issues: [],
     hotspots: [],
     hotspotKeys: [],
+    duplicationsKeys: [],
+    /*
+    duplications : [ {
+        key: xxx
+        blocks:  [ {
+            "line": xxx,
+            "size": xxx,
+            "file": xxx
+          },
+          {
+            "line": xxx,
+            "size": xxx,
+            "file": xxx
+          }, ... ]
+      }, ... ]
+    */
+    duplications: [],
     languages: [], 
+    /*
+    measures : {
+      'coverage' => { value: '0.0' },
+      'alert_status' => { value: 'ERROR' },
+      'bugs' => { value: '1' },
+      'reliability_rating' => { value: '3.0' },
+      'code_smells' => { value: '103' },
+      'ncloc_language_distribution' => { value: 'java=704;kotlin=6166;xml=1686' },
+      'duplicated_lines_density' => { value: '6.5' },
+      'security_rating' => { value: '1.0' },
+      'vulnerabilities' => { value: '0' },
+      'security_review_rating' => { value: '5.0' },
+      'sqale_rating' => { value: '1.0' } 
+    }
+    */
+    measures: new Map()
   };
 
   const leakPeriodFilter = data.sinceLeakPeriod ? '&sinceLeakPeriod=true' : '';
@@ -289,28 +326,40 @@ function logError(context, error){
       }
   }
 
+
   try {
-    const response = await got(`${sonarBaseURL}/api/measures/component?component=${sonarComponent}&metricKeys=ncloc_language_distribution`, {
+    const response = await got(`${sonarBaseURL}/api/measures/component?component=${sonarComponent}&metricKeys=ncloc_language_distribution,alert_status,bugs,code_smells,vulnerabilities,security_hotspots,coverage,duplicated_lines_density,reliability_rating,security_rating,security_review_rating,sqale_rating,`, {
         agent,
         headers
     });
     const json = JSON.parse(response.body);
     //nbResults = json.measures.length;
     //console.log(json.component.measures[0]);
-    const values = json.component.measures[0].value.split(";");
-    //console.log(values);
-    values.forEach(v => {
-      const value_separate = v.split('=');
-      data.languages.push({
-        "language":value_separate[0],
-        "line_count":value_separate[1]
-      });
+    json.component.measures.forEach(measure => {
+      if(measure.metric == "ncloc_language_distribution") {
+        const values = measure.value.split(";");
+        values.forEach(v => {
+          const value_separate = v.split('=');
+          data.languages.push({
+            "language":value_separate[0],
+            "line_count":value_separate[1],
+          });
+        });
+      }
+      data.measures.set(
+        measure.metric,
+        (({value}) => ({value}))(measure)
+      );
     });
     //console.log(data.languages);
+
   } catch (error) {
-      logError("getting languages", error);
+      logError("getting measures", error);
       return null;
   }
+  /*console.log(data.measures);
+  return; */
+
 
   if(data.languages.length > 0) {
     filterLanguages = "&languages=";
@@ -343,6 +392,8 @@ function logError(context, error){
       }
     } while (nbResults === pageSize && page <= maxPage);
   }
+ 
+  
  
   {
     const pageSize = 500;
@@ -383,7 +434,8 @@ function logError(context, error){
               line: issue.line,
               description: message,
               message: issue.message,
-              key: issue.key
+              key: issue.key,
+              type: issue.type
             };
           }));
       } catch (error) {
@@ -443,6 +495,79 @@ function logError(context, error){
             return null;
         }
       }
+
+      /********* Duplication lines *********/
+      // getting the key (= files)
+      page = 1;
+      do {
+        try {
+            const response = await got(`${sonarBaseURL}/api/measures/component_tree?component=${sonarComponent}&ps=${pageSize}&p=${page}&asc=false&metricSort=duplicated_lines_density&s=metric&metricSortFilter=withMeasuresOnly&metricKeys=duplicated_lines_density,duplicated_lines&strategy=leaves`, {
+                agent,
+                headers
+            });
+            page++;
+            const json = JSON.parse(response.body);
+            nbResults = json.components.length;
+            json.components.forEach(duplication => {
+                if(duplication.measures[0].value > 0) data.duplicationsKeys.push(duplication.key); // push only if value is higher that 0 lignes
+            });
+            //data.duplicationsKeys.push(...json.components.map(duplication => {duplication.key, duplication.measureskey));
+        } catch (error) {
+          logError("getting hotspots list", error);  
+            return null;
+        }
+      } while (nbResults === pageSize && page <= maxPage);     
+
+      // Getting the lines concerned in the different files
+      for (let duplicationsKey of data.duplicationsKeys){
+        try {
+            const response = await got(`${sonarBaseURL}/api/duplications/show?key=${duplicationsKey}`, {
+                agent,
+                headers
+            });
+            const jsonObj = JSON.parse(response.body);
+            jsonObj.duplications.forEach(duplication => {
+              let blocks = [];
+              duplication.blocks.forEach(block => {
+                blocks.push({
+                  "line": block.from,
+                  "size": block.size,
+                  "file": jsonObj.files[block._ref].name
+                });
+              });
+
+              data.duplications.push({
+                "key": duplicationsKey,
+                "blocks": blocks
+              });
+            });
+        } catch (error) {
+          logError("getting duplication details", error);  
+            return null;
+        }
+      }
+
+      /*for (let duplication of data.duplications){
+        for(let block of duplication.blocks) {
+          //console.log(block);
+          try {
+            const response = await got(`${sonarBaseURL}/api/sources/lines?key=${duplication.key}&from=${block.line-3}&to=${block.line+block.size+3}`, {
+                agent,
+                headers
+            });
+            const lines = JSON.parse(response.body).sources;
+            //TODO Get each lines
+            lines.forEach(line => {
+              //if(duplication.measures[0].value > 0) data.duplicationsKeys.push(duplication.key); // push only if value is higher that 0 lignes
+            });
+           
+          } catch (error) {
+            logError("getting lines details", error);  
+              return null;
+          }
+        }
+      }*/
+
     }
 
 
@@ -451,6 +576,9 @@ function logError(context, error){
     });
   
     data.summary = {
+      bugs: data.issues.filter(issue => issue.type === "BUG").length,
+      code_smells: data.issues.filter(issue => issue.type === "CODE_SMELL").length,
+      vulnerabilities: data.issues.filter(issue => issue.type === "VULNERABILITY").length,
       blocker: data.issues.filter(issue => issue.severity === "BLOCKER").length,
       critical: data.issues.filter(issue => issue.severity === "CRITICAL").length,
       major: data.issues.filter(issue => issue.severity === "MAJOR").length,
